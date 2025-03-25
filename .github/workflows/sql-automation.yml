@@ -8,9 +8,6 @@ on:
         required: false
         default: 'false'
 
-env:
-  SQL_DRIVER: 'ODBC Driver 17 for SQL Server'  # Defined here
-
 jobs:
   deploy-database:
     runs-on: ubuntu-latest
@@ -28,35 +25,55 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyodbc
         
+    - name: Create SQL automation script
+      run: |
+        cat <<EOF > run_sql.py
+        import os
+        import pyodbc
+
+        # Get environment variables
+        server = os.getenv('SQL_SERVER')
+        username = os.getenv('SQL_USERNAME')
+        password = os.getenv('SQL_PASSWORD')
+        driver = os.getenv('SQL_DRIVER')
+        overwrite = os.getenv('OVERWRITE', 'false')
+
+        # Ensure server format is correct
+        port = ''
+        if ',' in server:
+            server, port = server.split(',')
+        
+        # Construct connection string
+        conn_str = f'DRIVER={{{driver}}};SERVER={server};DATABASE=master;UID={username};PWD={password}'
+        if port:
+            conn_str += f',PORT={port}'
+
+        try:
+            print(f'Using driver: {driver}')
+            print(f'Connecting to SQL Server: {server}...')
+            
+            with pyodbc.connect(conn_str, autocommit=True) as conn:
+                cursor = conn.cursor()
+                if overwrite.lower() == 'true':
+                    print('Overwriting database...')
+                    cursor.execute('EXEC sp_DropAndCreateAutoTestDB')  # Ensure this stored procedure exists
+                else:
+                    print('Creating database without overwrite...')
+                    cursor.execute('EXEC sp_CreateAutoTestDB')  # Ensure this stored procedure exists
+                
+                print('Stored procedure executed successfully')
+
+        except Exception as e:
+            print(f'Error: {e}')
+            exit(1)
+        EOF
+
     - name: Run SQL automation
       env:
         SQL_SERVER: ${{ secrets.SQL_SERVER }}
         SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
         SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+        SQL_DRIVER: 'ODBC Driver 17 for SQL Server'  # Moved here to ensure availability
         OVERWRITE: ${{ github.event.inputs.overwrite }}
-      run: |
-        python -c "
-        import os
-        import pyodbc
-        
-        # Get all environment variables
-        server = os.getenv('SQL_SERVER').split(',')
-        username = os.getenv('SQL_USERNAME')
-        password = os.getenv('SQL_PASSWORD')
-        driver = os.getenv('SQL_DRIVER')  # Now properly defined
-        
-        print(f'Using driver: {driver}')
-        
-        try:
-            conn_str = f'DRIVER={{{driver}}};SERVER={server[0]},{server[1]};DATABASE=master;UID={username};PWD={password}'
-            print(f'Connection string: {conn_str[:30]}...')  # Print partial for security
-            
-            with pyodbc.connect(conn_str, autocommit=True) as conn:
-                cursor = conn.cursor()
-                cursor.execute('EXEC sp_CreateAutoTestDB')
-                print('Stored procedure executed successfully')
-                
-        except Exception as e:
-            print(f'Error: {e}')
-            exit(1)
-        "
+      run: python run_sql.py
+
