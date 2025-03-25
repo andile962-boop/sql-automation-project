@@ -7,12 +7,9 @@ on:
         description: 'Overwrite existing database?'
         required: false
         default: 'false'
-  push:
-    branches: [ main ]
-    paths: [ '.github/workflows/sql-automation.yml', 'scripts/*.sql' ]
 
 env:
-  SQL_DRIVER: 'ODBC Driver 17 for SQL Server'
+  SQL_DRIVER: 'ODBC Driver 17 for SQL Server'  # Defined here
 
 jobs:
   deploy-database:
@@ -30,57 +27,36 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pyodbc
-        echo "pyodbc" > requirements.txt
         
     - name: Run SQL automation
       env:
         SQL_SERVER: ${{ secrets.SQL_SERVER }}
         SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
         SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
-        OVERWRITE: ${{ github.event.inputs.overwrite || 'false' }}
+        OVERWRITE: ${{ github.event.inputs.overwrite }}
       run: |
         python -c "
         import os
         import pyodbc
         
-        # Parse inputs
-        server_parts = os.getenv('SQL_SERVER').split(',')
-        overwrite = os.getenv('OVERWRITE').lower() == 'true'
+        # Get all environment variables
+        server = os.getenv('SQL_SERVER').split(',')
+        username = os.getenv('SQL_USERNAME')
+        password = os.getenv('SQL_PASSWORD')
+        driver = os.getenv('SQL_DRIVER')  # Now properly defined
         
-        # Connection string
-        conn_str = f'DRIVER={{{os.getenv("SQL_DRIVER")}}};SERVER={server_parts[0]},{server_parts[1]};DATABASE=master;UID={os.getenv("SQL_USERNAME")};PWD={os.getenv("SQL_PASSWORD")}'
+        print(f'Using driver: {driver}')
         
         try:
-            print('🚀 Starting database automation...')
+            conn_str = f'DRIVER={{{driver}}};SERVER={server[0]},{server[1]};DATABASE=master;UID={username};PWD={password}'
+            print(f'Connection string: {conn_str[:30]}...')  # Print partial for security
+            
             with pyodbc.connect(conn_str, autocommit=True) as conn:
                 cursor = conn.cursor()
+                cursor.execute('EXEC sp_CreateAutoTestDB')
+                print('Stored procedure executed successfully')
                 
-                # Read stored procedure script
-                with open('scripts/sp_CreateAutoTestDB.sql', 'r') as f:
-                    sql_script = f.read()
-                
-                # Execute creation script
-                print('📜 Executing stored procedure creation...')
-                cursor.execute(sql_script)
-                
-                # Execute the procedure
-                print(f'⚙️ Executing procedure (overwrite={overwrite})...')
-                cursor.execute(f'EXEC sp_CreateAutoTestDB @OverwriteExisting={1 if overwrite else 0}')
-                
-                # Verification
-                print('🔍 Verifying results...')
-                cursor.execute(\"\"\"
-                    USE AutoTest;
-                    SELECT 
-                        DB_NAME() AS db,
-                        (SELECT COUNT(*) FROM sys.tables WHERE name = 'user') AS table_exists,
-                        (SELECT COUNT(*) FROM [user]) AS user_count
-                \"\"\")
-                result = cursor.fetchone()
-                print(f'✅ Verification: Database={result.db}, Table exists={result.table_exists}, Users={result.user_count}')
-                
-            print('🎉 Automation completed successfully!')
         except Exception as e:
-            print(f'❌ Error: {str(e)}')
+            print(f'Error: {e}')
             exit(1)
         "
